@@ -10,6 +10,7 @@ import time
 import json
 from flask import Flask
 import threading
+import asyncio
 
 # ===== настройки =====
 STOP_LOSS = 0.02
@@ -23,7 +24,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# Flask app для поддержки Web Service
+# Flask app
 app_flask = Flask(__name__)
 
 exchange = ccxt.binance()
@@ -342,11 +343,11 @@ def index():
 def health():
     return "OK", 200
 
-# ===== Запуск Flask в отдельном потоке =====
+# ===== Запуск Flask =====
 def run_flask():
     app_flask.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
-# ===== Запуск бота (в главном потоке) =====
+# ===== Запуск бота =====
 async def run_bot():
     load_data()
     
@@ -370,5 +371,13 @@ if __name__ == "__main__":
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Запускаем бота в главном потоке
-    asyncio.run(run_bot())
+    # Создаем новый event loop для бота
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(run_bot())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
