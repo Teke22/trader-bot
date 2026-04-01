@@ -1,5 +1,5 @@
 ccxt==4.1.22
-pandas==2.0.3
+pandas==2.0.3 --no-binary=:all:
 ta==0.10.2
 python-telegram-bot[job-queue]==20.3
 python-dotenv==1.0.0
