@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import os
 import time
 import json
-from flask import Flask, request
+from flask import Flask
 import threading
 
 # ===== настройки =====
@@ -21,7 +21,7 @@ load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-PORT = int(os.getenv("PORT", 5000))
+PORT = int(os.getenv("PORT", 10000))
 
 # Flask app для поддержки Web Service
 app_flask = Flask(__name__)
@@ -39,9 +39,6 @@ symbols = [
 ]
 
 # ===== данные =====
-last_signals = {}
-last_sent_time = {}
-
 positions = {
     "aggressive": {},
     "smart": {}
@@ -124,7 +121,6 @@ async def check_market(bot):
             signal_now = df['signal'].iloc[-1]
 
             price = df['close'].iloc[-1]
-            ema = df['ema'].iloc[-1]
 
             aggressive_signal = None
             smart_signal = None
@@ -337,7 +333,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📜 История сделок":
         await show_history(update, context)
 
-# ===== Flask маршрут для проверки работы =====
+# ===== Flask маршруты =====
 @app_flask.route('/')
 def index():
     return "Trading Bot is running!", 200
@@ -346,32 +342,33 @@ def index():
 def health():
     return "OK", 200
 
-# ===== Запуск бота в отдельном потоке =====
-def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
+# ===== Запуск Flask в отдельном потоке =====
+def run_flask():
+    app_flask.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+
+# ===== Запуск бота (в главном потоке) =====
+async def run_bot():
     load_data()
     
-    app = ApplicationBuilder().token(TOKEN).build()
+    application = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT, handle_message))
 
     async def loop_task(context):
         await check_market(context.bot)
 
-    app.job_queue.run_repeating(loop_task, interval=100, first=5)
+    application.job_queue.run_repeating(loop_task, interval=100, first=5)
 
     print("Бот запущен 🚀")
-    app.run_polling()
+    await application.run_polling()
 
-# ===== Запуск Flask и бота =====
+# ===== Точка входа =====
 if __name__ == "__main__":
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
     
-    # Запускаем Flask сервер
-    app_flask.run(host="0.0.0.0", port=PORT)
+    # Запускаем бота в главном потоке
+    asyncio.run(run_bot())
