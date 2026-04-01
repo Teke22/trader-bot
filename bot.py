@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import os
 import time
 import json
+from flask import Flask, request
+import threading
 
 # ===== настройки =====
 STOP_LOSS = 0.02
@@ -19,9 +21,10 @@ load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+PORT = int(os.getenv("PORT", 5000))
 
-# Путь для сохранения данных (важно для Docker)
-DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "data.json")
+# Flask app для поддержки Web Service
+app_flask = Flask(__name__)
 
 exchange = ccxt.binance()
 
@@ -58,10 +61,10 @@ stats = {
 trades_history = []
 
 # ===== сохранение =====
+DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "data.json")
+
 def save_data():
-    # Создаем директорию data, если её нет
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    
     data = {
         "positions": positions,
         "trade_stats": trade_stats,
@@ -72,7 +75,6 @@ def save_data():
         json.dump(data, f, indent=2)
     print(f"Данные сохранены в {DATA_FILE}")
 
-# ===== загрузка =====
 def load_data():
     global positions, trade_stats, stats, trades_history
     try:
@@ -124,7 +126,6 @@ async def check_market(bot):
             price = df['close'].iloc[-1]
             ema = df['ema'].iloc[-1]
 
-            # ===== стратегии =====
             aggressive_signal = None
             smart_signal = None
 
@@ -136,13 +137,11 @@ async def check_market(bot):
             elif rsi > 65 and macd_now < signal_now:
                 smart_signal = "SELL"
 
-            # ===== обработка =====
             for mode, signal in [("aggressive", aggressive_signal), ("smart", smart_signal)]:
 
                 if not signal:
                     continue
 
-                # ===== ВХОД =====
                 if signal == "BUY" and symbol not in positions[mode]:
 
                     amount = TRADE_SIZE / price
@@ -160,7 +159,6 @@ async def check_market(bot):
                         f"🔥 {mode.upper()} BUY {symbol}\nЦена: {price:.2f}"
                     )
 
-                # ===== SELL ТОЛЬКО SMART =====
                 elif mode == "smart" and signal == "SELL" and symbol in positions[mode]:
                     pos = positions[mode][symbol]
 
@@ -187,7 +185,6 @@ async def check_market(bot):
 
                     del positions[mode][symbol]
 
-                # ===== SL / TP =====
                 if symbol in positions[mode]:
                     pos = positions[mode][symbol]
                     exit_trade = None
@@ -340,12 +337,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📜 История сделок":
         await show_history(update, context)
 
-# ===== запуск =====
-def main():
-    print("Загрузка данных...")
+# ===== Flask маршрут для проверки работы =====
+@app_flask.route('/')
+def index():
+    return "Trading Bot is running!", 200
+
+@app_flask.route('/health')
+def health():
+    return "OK", 200
+
+# ===== Запуск бота в отдельном потоке =====
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     load_data()
     
-    print("Запуск бота...")
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -359,5 +366,12 @@ def main():
     print("Бот запущен 🚀")
     app.run_polling()
 
+# ===== Запуск Flask и бота =====
 if __name__ == "__main__":
-    main()
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаем Flask сервер
+    app_flask.run(host="0.0.0.0", port=PORT)
