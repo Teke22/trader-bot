@@ -7,8 +7,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 from dotenv import load_dotenv
 import os
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
 
 # ===== настройки =====
 STOP_LOSS = 0.02
@@ -20,7 +18,6 @@ load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-PORT = int(os.getenv("PORT", 10000))
 
 exchange = ccxt.binance()
 
@@ -32,7 +29,7 @@ symbols = [
     'ARB/USDT', 'OP/USDT', 'SUI/USDT', 'NEAR/USDT', 'FIL/USDT'
 ]
 
-# ===== данные (только в памяти) =====
+# ===== данные =====
 positions = {
     "aggressive": {},
     "smart": {}
@@ -52,27 +49,9 @@ keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ===== HTTP сервер для Render =====
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/' or self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'Trading Bot is running!')
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def log_message(self, format, *args):
-        pass
-
-def run_http_server():
-    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    server.serve_forever()
-
-# ===== логика бота =====
+# ===== логика =====
 async def check_market(bot):
+    print("Проверка рынка...")
     for symbol in symbols:
         try:
             bars = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
@@ -217,17 +196,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📉 RSI сейчас":
         await show_rsi(update, context)
 
-# ===== Глобальные переменные для event loop =====
-loop = None
-application = None
-
-def run_bot_in_thread():
-    """Запуск бота в отдельном потоке с собственным event loop"""
-    global loop, application
-    
-    # Создаем новый event loop для этого потока
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# ===== Запуск =====
+async def main():
+    print("🚀 Запуск торгового бота...")
     
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -236,33 +207,10 @@ def run_bot_in_thread():
     async def loop_task(context):
         await check_market(context.bot)
     
-    # Запускаем задачу в event loop
-    loop.create_task(application.initialize())
-    loop.create_task(application.run_polling())
     application.job_queue.run_repeating(loop_task, interval=100, first=5)
     
     print("✅ Бот запущен и работает!")
-    
-    # Запускаем event loop бесконечно
-    loop.run_forever()
+    await application.run_polling()
 
-# ===== Точка входа =====
 if __name__ == "__main__":
-    print("🚀 Запуск торгового бота...")
-    
-    # Запускаем HTTP сервер в фоне
-    http_thread = threading.Thread(target=run_http_server, daemon=True)
-    http_thread.start()
-    print(f"✅ HTTP сервер запущен на порту {PORT}")
-    
-    # Запускаем бота в отдельном потоке с собственным event loop
-    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=False)
-    bot_thread.start()
-    
-    # Держим главный поток живым
-    try:
-        bot_thread.join()
-    except KeyboardInterrupt:
-        print("Остановка бота...")
-        if loop:
-            loop.call_soon_threadsafe(loop.stop)
+    asyncio.run(main())
