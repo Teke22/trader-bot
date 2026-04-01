@@ -65,7 +65,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
     
     def log_message(self, format, *args):
-        pass  # Отключаем логи HTTP сервера
+        pass
 
 def run_http_server():
     server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
@@ -217,16 +217,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📉 RSI сейчас":
         await show_rsi(update, context)
 
-# ===== Запуск =====
-async def main():
-    print("🚀 Запуск торгового бота...")
+# ===== Глобальные переменные для event loop =====
+loop = None
+application = None
+
+def run_bot_in_thread():
+    """Запуск бота в отдельном потоке с собственным event loop"""
+    global loop, application
     
-    # Запускаем HTTP сервер в фоне
-    http_thread = threading.Thread(target=run_http_server, daemon=True)
-    http_thread.start()
-    print(f"✅ HTTP сервер запущен на порту {PORT}")
+    # Создаем новый event loop для этого потока
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    # Запускаем Telegram бота
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT, handle_message))
@@ -234,10 +236,33 @@ async def main():
     async def loop_task(context):
         await check_market(context.bot)
     
+    # Запускаем задачу в event loop
+    loop.create_task(application.initialize())
+    loop.create_task(application.run_polling())
     application.job_queue.run_repeating(loop_task, interval=100, first=5)
     
     print("✅ Бот запущен и работает!")
-    await application.run_polling()
+    
+    # Запускаем event loop бесконечно
+    loop.run_forever()
 
+# ===== Точка входа =====
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("🚀 Запуск торгового бота...")
+    
+    # Запускаем HTTP сервер в фоне
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    print(f"✅ HTTP сервер запущен на порту {PORT}")
+    
+    # Запускаем бота в отдельном потоке с собственным event loop
+    bot_thread = threading.Thread(target=run_bot_in_thread, daemon=False)
+    bot_thread.start()
+    
+    # Держим главный поток живым
+    try:
+        bot_thread.join()
+    except KeyboardInterrupt:
+        print("Остановка бота...")
+        if loop:
+            loop.call_soon_threadsafe(loop.stop)
